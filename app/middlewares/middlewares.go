@@ -4,10 +4,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/translator/api/models"
+	"github.com/translator/app/models"
 )
-
-var ()
 
 // Middleware Middleware
 type Middleware func(http.HandlerFunc) http.HandlerFunc

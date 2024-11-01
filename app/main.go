@@ -11,20 +11,21 @@ import (
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/hlog"
-	"github.com/rs/zerolog/log"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	"github.com/justinas/alice"
 
-	"github.com/translator/api/handlers"
-	"github.com/translator/api/middlewares"
-	"github.com/translator/api/models"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/translator/app/handlers"
+	"github.com/translator/app/middlewares"
+	"github.com/translator/app/models"
 )
 
 var (
-	addr    = flag.String("listen-address", ":8080", "The address to listen on for HTTP requests.")
-	version string
+	addr        = flag.String("listen-address", ":8080", "The address to listen on for HTTP requests.")
+	metricsAddr = flag.String("metrics-address", ":2112", "The address to listen on for Prometheus metrics requests.")
+	version     string
 )
 
 func init() {
@@ -60,7 +61,8 @@ func main() {
 
 	url := "/api/v1"
 
-	r.HandleFunc("/index", handlers.Index).Methods("GET")
+	r.HandleFunc("/healthcheck", handlers.Healthcheck).Methods("GET")
+
 	r.HandleFunc(url+"/translate", middlewares.Chain(handlers.Translate, middlewares.ValidateContentType(), middlewares.ValidateAuthorization())).Methods("POST")
 
 	srv := &http.Server{
@@ -70,7 +72,8 @@ func main() {
 		ReadTimeout:  60 * time.Second,
 	}
 
-	go serveHTTP(srv)
+	go serveHTTP(ctx, log, srv)
+	go serveMetrics(ctx, log, *metricsAddr)
 	<-quit
 
 	// Gracefully shutdown connections
@@ -78,15 +81,6 @@ func main() {
 	defer cancel()
 
 	srv.Shutdown(ctx)
-}
-
-func serveHTTP(srv *http.Server) {
-	log.Info().Msgf("translator API Server started at %s", srv.Addr)
-	err := srv.ListenAndServe()
-
-	if err != http.ErrServerClosed {
-		log.Error().Err(err).Msg("Starting Server listener failed")
-	}
 }
 
 func accessLogger(r *http.Request, status, size int, dur time.Duration) {
@@ -98,4 +92,23 @@ func accessLogger(r *http.Request, status, size int, dur time.Duration) {
 		Int("size", size).
 		Dur("duration_ms", dur).
 		Msg("request")
+}
+
+func serveHTTP(ctx context.Context, log zerolog.Logger, srv *http.Server) {
+	log.Info().Msgf("translator API Server started at %s", srv.Addr)
+	err := srv.ListenAndServe()
+
+	if err != http.ErrServerClosed {
+		log.Error().Err(err).Msg("Starting Server listener failed")
+	}
+}
+
+func serveMetrics(ctx context.Context, log zerolog.Logger, addr string) {
+	log.Info().Interface("event_id", ctx.Value(models.IDKey{})).Msgf("translator API Prometheus metrics on port %s", addr)
+
+	http.Handle("/metrics", promhttp.Handler())
+
+	if err := http.ListenAndServe(addr, nil); err != nil {
+		log.Error().Caller().Interface("event_id", ctx.Value(models.IDKey{})).Err(err).Msg("starting Prometheus listener failed")
+	}
 }
